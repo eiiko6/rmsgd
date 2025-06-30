@@ -1,7 +1,7 @@
 use anyhow::Result;
 use clap::Parser;
 use rmsgd::cli::{Action, Cli};
-use rmsgd::core::server::start_server;
+use rmsgd::server::server::start_server;
 
 #[tokio::main]
 async fn main() -> Result<()> {
