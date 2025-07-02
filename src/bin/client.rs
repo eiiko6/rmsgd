@@ -1,10 +1,13 @@
 use anyhow::Result;
 use chrono::Utc;
 use owo_colors::OwoColorize;
+use rustyline::{DefaultEditor, ExternalPrinter};
 use serde_json::from_str;
 use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc;
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, stdin},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::TcpStream,
 };
 
@@ -42,44 +45,62 @@ async fn main() -> Result<()> {
 
     let stream = TcpStream::connect("127.0.0.1:7878").await?;
     let local_addr = stream.local_addr()?;
-    let (reader, writer) = stream.into_split();
+    let (reader, mut writer) = stream.into_split();
 
     let mut stream_buf_reader = BufReader::new(reader);
 
+    let (line_tx, mut line_rx) = mpsc::channel::<String>(100);
+
+    let rl = Arc::new(Mutex::new(DefaultEditor::new()?));
+    let printer = Arc::new(Mutex::new(rl.lock().unwrap().create_external_printer()?));
+
     tokio::spawn(async move {
-        let mut client_input = String::new();
-        let mut writer = writer;
-        let mut stdin_reader = BufReader::new(stdin());
+        let rl = Arc::clone(&rl);
+        let line_tx = line_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                let readline = tokio::task::spawn_blocking({
+                    let rl = Arc::clone(&rl);
+                    move || {
+                        let mut rl = rl.lock().unwrap();
+                        rl.readline("➜ ")
+                    }
+                })
+                .await;
 
-        loop {
-            client_input.clear();
-
-            // print!("➜ ");
-            io::stdout().flush().unwrap();
-
-            let bytes_read = stdin_reader.read_line(&mut client_input).await.unwrap_or(0);
-            if bytes_read == 0 {
-                break;
+                match readline {
+                    Ok(Ok(line)) => {
+                        if line.trim().is_empty() {
+                            continue;
+                        }
+                        if line_tx.send(line).await.is_err() {
+                            break;
+                        }
+                    }
+                    _ => break,
+                }
             }
+        });
+    });
 
-            let trimmed = client_input.trim();
-            if !trimmed.is_empty() {
-                let msg = Message {
-                    client_address: local_addr,
-                    username: client_username.clone(),
-                    content: trimmed.to_string(),
-                    time: Utc::now(),
-                };
+    // async task to receive lines and send them over TCP
+    tokio::spawn(async move {
+        while let Some(line) = line_rx.recv().await {
+            let msg = Message {
+                client_address: local_addr,
+                username: client_username.clone(),
+                content: line,
+                time: Utc::now(),
+            };
 
-                if let Ok(json_msg) = serde_json::to_string(&msg) {
-                    if let Err(e) = writer.write_all(json_msg.as_bytes()).await {
-                        eprintln!("Error sending to server: {e}");
-                        break;
-                    }
-                    if let Err(e) = writer.write_all(b"\n").await {
-                        eprintln!("Error sending newline to server: {e}");
-                        break;
-                    }
+            if let Ok(json_msg) = serde_json::to_string(&msg) {
+                if let Err(e) = writer.write_all(json_msg.as_bytes()).await {
+                    eprintln!("Error sending to server: {e}");
+                    break;
+                }
+                if let Err(e) = writer.write_all(b"\n").await {
+                    eprintln!("Error sending newline to server: {e}");
+                    break;
                 }
             }
         }
@@ -96,12 +117,13 @@ async fn main() -> Result<()> {
 
         let message: Message = from_str(&server_output)?;
 
-        println!(
+        let mut printer = printer.lock().unwrap();
+        printer.print(format!(
             "[{}] {}: {}",
             message.time.format("%Y-%m-%d %H:%M:%S").dimmed(),
             message.username.blue(),
             message.content
-        );
+        ))?;
     }
 
     Ok(())
