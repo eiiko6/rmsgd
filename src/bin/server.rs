@@ -11,8 +11,10 @@ use rmsgd::Message;
 
 #[tokio::main]
 pub async fn main() -> Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:7878").await?;
+    let listener = TcpListener::bind("0.0.0.0:7878").await?;
     let (tx, _rx) = broadcast::channel::<Message>(32);
+
+    // let connected_users: Arc<Mutex<HashSet<User>>> = Arc::new(Mutex::new(HashSet::new()));
 
     loop {
         let (stream, client_socket_address) = listener.accept().await?;
@@ -57,7 +59,7 @@ async fn handle_connection(
             }
 
             Ok(msg) = rx.recv() => {
-                if msg.client_address != addr {
+                if msg.user.client_address != addr {
                     let serialized = to_string(&msg)?;
                     stream_writer.write_all(serialized.as_bytes()).await?;
                     stream_writer.write_all("\n".as_bytes()).await?;

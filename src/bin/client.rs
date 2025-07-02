@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::Utc;
+use chrono::{DateTime, Local, Utc};
 use owo_colors::OwoColorize;
 use rustyline::{DefaultEditor, ExternalPrinter};
 use serde_json::from_str;
@@ -11,7 +11,7 @@ use tokio::{
     net::TcpStream,
 };
 
-use rmsgd::Message;
+use rmsgd::{Message, User};
 
 fn get_username() -> Result<String> {
     // let mut path = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
@@ -87,8 +87,10 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         while let Some(line) = line_rx.recv().await {
             let msg = Message {
-                client_address: local_addr,
-                username: client_username.clone(),
+                user: User {
+                    client_address: local_addr,
+                    username: client_username.clone(),
+                },
                 content: line,
                 time: Utc::now(),
             };
@@ -120,8 +122,10 @@ async fn main() -> Result<()> {
         let mut printer = printer.lock().unwrap();
         printer.print(format!(
             "[{}] {}: {}",
-            message.time.format("%Y-%m-%d %H:%M:%S").dimmed(),
-            message.username.blue(),
+            DateTime::<Local>::from(message.time)
+                .format("%Y-%m-%d %H:%M:%S")
+                .dimmed(),
+            message.user.username.blue(),
             message.content
         ))?;
     }
